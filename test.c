@@ -37,7 +37,6 @@ int main(int argc, char *argv[])
     randomize_matrix(Y, m, 1);
     copy_matrix(Y, Y_ref, m);
 
-
     if (kernel_num == 1){
         printf("Start the sanity check...\n");
         fflush(stdout);
@@ -58,9 +57,9 @@ int main(int argc, char *argv[])
         for (int i = 0; i < N; i++){
             mydgemv_t(A, X, Y, m, n);
         }
-    }else{
+    }else {
         for (int i = 0; i < N; i++){
-            cblas_dgemv(CblasRowMajor, CblasNoTrans, 1, 1, alpha, A, n, X, 1, beta, Y, 1);
+            cblas_dgemv(CblasRowMajor, CblasNoTrans, m, n, alpha, A, n, X, 1, beta, Y, 1);
         }
     }
     t1 = get_sec();

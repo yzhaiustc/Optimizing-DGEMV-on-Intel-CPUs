@@ -3,91 +3,100 @@
 #include "omp.h"
 #define A(i, j) A[(i)*lda+(j)]//row-major
 
-static void dgemv_kernel(long int n, double *a1, double *a2, double *a3, double *a4, double *x, double *y) __attribute__((noinline));
-
-static void dgemv_kernel(long int n, double *a1, double *a2, double *a3, double *a4, double *x, double *y)
-{
-    register long int i = 0;
-    
-    __asm__ __volatile__(
-        "vxorps		%%zmm4 , %%zmm4, %%zmm4                 \n\t"
-        "vxorps		%%zmm5 , %%zmm5, %%zmm5                 \n\t"
-        "vxorps		%%zmm6 , %%zmm6, %%zmm6                 \n\t"
-        "vxorps		%%zmm7 , %%zmm7, %%zmm7                 \n\t"
-
-        ".p2align 4                          \n\t"
-        "1:                     			 \n\t"
-        "vmovups      (%2,%0,8), %%zmm12                    \n\t" // LX
-        "vfmadd231pd  (%4,%0,8), %%zmm12, %%zmm4            \n\t" // F1
-        "vfmadd231pd  (%5,%0,8), %%zmm12, %%zmm5            \n\t" // F2
-        "vfmadd231pd  (%6,%0,8), %%zmm12, %%zmm6            \n\t" // F3
-        "vfmadd231pd  (%7,%0,8), %%zmm12, %%zmm7            \n\t" // F4
-
-        "addq       $8 , %0                                 \n\t"
-        "subq       $8 , %1                                 \n\t"
-        "jnz        1b                                      \n\t"
-
-        "vextractf64x4     $0, %%zmm4 , %%ymm16             \n\t"
-        "vextractf64x4     $0, %%zmm5 , %%ymm17             \n\t"
-        "vextractf64x4     $0, %%zmm6 , %%ymm18             \n\t"
-        "vextractf64x4     $0, %%zmm7 , %%ymm19             \n\t"
-        
-        "vextractf64x4     $1, %%zmm4 , %%ymm4              \n\t"
-        "vextractf64x4     $1, %%zmm5 , %%ymm5              \n\t"
-        "vextractf64x4     $1, %%zmm6 , %%ymm6              \n\t"
-        "vextractf64x4     $1, %%zmm7 , %%ymm7              \n\t"
-
-        "vaddpd       %%ymm4 , %%ymm16, %%ymm4              \n\t"
-        "vaddpd       %%ymm5 , %%ymm17, %%ymm5              \n\t"
-        "vaddpd       %%ymm6 , %%ymm18, %%ymm6              \n\t"
-        "vaddpd       %%ymm7 , %%ymm19, %%ymm7              \n\t"
-
-        "vextractf128   $1 , %%ymm4, %%xmm12	      \n\t"
-        "vextractf128   $1 , %%ymm5, %%xmm13	      \n\t"
-        "vextractf128   $1 , %%ymm6, %%xmm14	      \n\t"
-        "vextractf128   $1 , %%ymm7, %%xmm15	      \n\t"
-
-        "vaddpd		%%xmm4, %%xmm12, %%xmm4       \n\t"
-        "vaddpd		%%xmm5, %%xmm13, %%xmm5       \n\t"
-        "vaddpd		%%xmm6, %%xmm14, %%xmm6       \n\t"
-        "vaddpd		%%xmm7, %%xmm15, %%xmm7       \n\t"
-
-        "vhaddpd        %%xmm4, %%xmm4, %%xmm4  \n\t"
-        "vhaddpd        %%xmm5, %%xmm5, %%xmm5  \n\t"
-        "vhaddpd        %%xmm6, %%xmm6, %%xmm6  \n\t"
-        "vhaddpd        %%xmm7, %%xmm7, %%xmm7  \n\t"
-
-        "vmovsd         %%xmm4,    (%3)         \n\t"
-        "vmovsd         %%xmm5,   8(%3)         \n\t"
-        "vmovsd         %%xmm6,  16(%3)         \n\t"
-        "vmovsd         %%xmm7,  24(%3)         \n\t"
-
-        "vzeroupper			 \n\t"
-
-        :
-            "+r" (i),	// 0	
-            "+r" (n)  	// 1
-        :
-            "r" (x),    // 2
-            "r" (y),    // 3
-            "r" (a1),   // 4
-            "r" (a2),   // 5
-            "r" (a3),   // 6
-            "r" (a4)    // 7
-        : "cc", 
-        "%xmm4", "%xmm5", "%xmm6", "%xmm7",
-        "%xmm12", "%xmm13", "%xmm14", "%xmm15",
-        "memory"
-    );
+#define INIT_n1(no)\
+	"vxorps %%zmm"#no",%%zmm"#no",%%zmm"#no";"
+#define INIT_n4\
+	INIT_n1(4)\
+	INIT_n1(5)\
+	INIT_n1(6)\
+	INIT_n1(7)
+#define LOAD_X\
+	"vmovups (%%r14,%%r15,8), %%zmm12;"
+#define FMA(a, b)\
+	"vfmadd231pd (%%"#a", %%r15, 8), %%zmm12,%%zmm"#b";"
+#define FMA_4(a1, b1, a2, b2, a3, b3, a4, b4)\
+	FMA(a1, b1)\
+    FMA(a2, b2)\
+    FMA(a3, b3)\
+    FMA(a4, b4)
+#define EXTRACT_0(vr1,vr2)\
+	"vextractf64x4 $0, %%zmm"#vr1", %%ymm"#vr2";"
+#define EXTRACT_0_4(a,b,c,d,e,f,g,h)\
+	EXTRACT_0(a,b)\
+    EXTRACT_0(c,d)\
+    EXTRACT_0(e,f)\
+    EXTRACT_0(g,h)
+#define EXTRACT_1(vr1,vr2)\
+	"vextractf64x4 $1, %%zmm"#vr1", %%ymm"#vr2";"
+#define EXTRACT_1_4(a,b,c,d,e,f,g,h)\
+	EXTRACT_1(a,b)\
+    EXTRACT_1(c,d)\
+    EXTRACT_1(e,f)\
+    EXTRACT_1(g,h)
+#define EXTRACT128(vr1,vr2)\
+	"vextractf128 $1, %%ymm"#vr1", %%xmm"#vr2";"
+#define EXTRACT_128_4(a,b,c,d,e,f,g,h)\
+	EXTRACT128(a,b)\
+    EXTRACT128(c,d)\
+    EXTRACT128(e,f)\
+    EXTRACT128(g,h)
+#define VADD_1(vr1,vr2,vr3)\
+    "vaddpd %%"#vr1", %%"#vr2", %%"#vr3";"
+#define VADD_4(vr11,vr12,vr13,vr21,vr22,vr23,vr31,vr32,vr33,vr41,vr42,vr43)\
+    VADD_1(vr11,vr12,vr13)\
+    VADD_1(vr21,vr22,vr23)\
+    VADD_1(vr31,vr32,vr33)\
+    VADD_1(vr41,vr42,vr43)
+#define VHADD_1(vr)\
+    "vhaddpd %%xmm"#vr", %%xmm"#vr", %%xmm"#vr";"
+#define VHADD_4(vr1,vr2,vr3,vr4)\
+    VHADD_1(vr1)\
+    VHADD_1(vr2)\
+    VHADD_1(vr3)\
+    VHADD_1(vr4)
+#define VSTORE_1(vr, offset)\
+    "vmovsd %%xmm"#vr", "#offset"(%2);"
+#define VSTORE_4(vr1, offset1, vr2, offset2, vr3, offset3, vr4, offset4)\
+    VSTORE_1(vr1,offset1)\
+    VSTORE_1(vr2,offset2)\
+    VSTORE_1(vr3,offset3)\
+    VSTORE_1(vr4,offset4)
+#define DGEMV_KERNEL {\
+	__asm__ __volatile__(\
+        INIT_n4 "xorq %%r15,%%r15;"\
+        "1:\n\t"\
+        "vmovups (%1,%%r15,8), %%zmm12;"\
+        "vfmadd231pd (%3,%%r15,8), %%zmm12, %%zmm4;"\
+        "vfmadd231pd (%4,%%r15,8), %%zmm12, %%zmm5;"\
+        "vfmadd231pd (%5,%%r15,8), %%zmm12, %%zmm6;"\
+        "vfmadd231pd (%6,%%r15,8), %%zmm12, %%zmm7;"\
+        "addq $8, %%r15;subq $8, %0;jnz 1b;"\
+        EXTRACT_0_4(4,16,5,17,6,18,7,19)\
+        EXTRACT_1_4(4,4,5,5,6,6,7,7)\
+        VADD_4(ymm4,ymm16,ymm4,ymm5,ymm17,ymm5,ymm6,ymm18,ymm6,ymm7,ymm19,ymm7)\
+        EXTRACT_128_4(4,12,5,13,6,14,7,15)\
+        VADD_4(xmm4,xmm12,xmm4,xmm5,xmm13,xmm5,xmm6,xmm14,xmm6,xmm7,xmm15,xmm7)\
+        VHADD_4(4,5,6,7)\
+        VSTORE_4(4,0,5,8,6,16,7,24)\
+        "vzeroupper			 \n\t"\
+        :"+r"(n8)\
+        :"r"(x),"r"(y_buffer),"r"(a1),"r"(a2),"r"(a3),"r"(a4)\
+        :"r15",\
+          "cc","memory","zmm0","zmm1","zmm2","zmm3","zmm4","zmm5",\
+          "zmm6","zmm7","zmm8","zmm9","zmm10","zmm11","zmm12",\
+          "zmm13","zmm14","zmm15","zmm16","zmm17","zmm18","zmm19",\
+          "zmm20","zmm21","zmm22","zmm23","zmm24","zmm25",\
+          "zmm26","zmm27","zmm28","zmm29","zmm30","zmm31");\
 }
+
 
 void mydgemv_compute(double *A, double *x, double *y, long int m, long int n){
     int lda = n;//row-major
     int m4 = m & -4;
     int n4 = n & -4;
-    int n8 = n & -8;
+    long int n8 = n & -8;
     int i, j;
-    double y_buffer[4];
+    double y_buffer[4] = {0.};
     double r_reg[4];
     double a_reg[4];
     double *A_ptr;
@@ -96,17 +105,17 @@ void mydgemv_compute(double *A, double *x, double *y, long int m, long int n){
     for (i = 0; i < m4; i += 4){
         A_ptr = A + i*lda;
         _mm256_storeu_pd(r_reg, _mm256_loadu_pd(y+i));
-
+        n8 = n & -8;
         if (n8){
             a1 = A_ptr; A_ptr += lda;
             a2 = A_ptr; A_ptr += lda;
             a3 = A_ptr; A_ptr += lda;
             a4 = A_ptr; A_ptr += lda;
-            dgemv_kernel(n8, a1, a2, a3, a4, x, y_buffer);
+            DGEMV_KERNEL
             _mm256_storeu_pd(r_reg, _mm256_add_pd(_mm256_loadu_pd(r_reg), _mm256_loadu_pd(y_buffer)) );
         }
 
-        j = n8;
+        j = (n & -8);
         A_ptr = &A(i, j);
         while (j < n){
             xj = x[j];
