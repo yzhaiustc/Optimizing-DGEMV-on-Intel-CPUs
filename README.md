@@ -6,6 +6,6 @@ An optimized CPU version of DGEMV with comparable/faster performance than Intel 
 
 SIMD, AVX512, OpenMP.
 
-## Requirement
+## Requirements
 
- We require processors supporting AVX512F instructions to run the code.
+ We require processors supporting AVX512F instructions to compile and run the code.
